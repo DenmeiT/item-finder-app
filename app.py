@@ -1,7 +1,6 @@
 import streamlit as st
 from serpapi import GoogleSearch
 from PIL import Image
-import io
 import tempfile
 import os
 
@@ -11,7 +10,7 @@ st.set_page_config(page_title="探し物は何ですか？", page_icon="🔍", l
 try:
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
 except Exception:
-    st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを確認してください。")
+    st.error("⚠️ APIキーが設定されていません。")
     st.stop()
 
 st.title("🔍 探し物は何ですか？")
@@ -25,34 +24,28 @@ with st.sidebar:
     search_btn = st.button("この条件で探す", type="primary")
 
 def process_and_search_lens(uploaded_file):
-    # --- 画像の軽量化処理 ---
-    # 大きすぎる画像はエラーの原因になるため、最大800pxにリサイズ
+    # 画像の軽量化処理 (PILを使用)
     img = Image.open(uploaded_file)
     img.thumbnail((800, 800))
     
-    # 一時ファイルとして保存
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        # RGBに変換してJPEG保存
         img.convert("RGB").save(tmp.name, format="JPEG", quality=85)
         tmp_path = tmp.name
 
     try:
-        # SerpApi推奨の送信方式 (fileパラメータ)
+        # --- ここを修正：GoogleSearchの引数に直接 file を渡します ---
         params = {
             "engine": "google_lens",
             "api_key": SERPAPI_KEY,
             "hl": "ja"
         }
+        # fileパラメータを個別に指定する現在のライブラリ仕様に対応
         search = GoogleSearch(params)
-        # 内部でファイルを読み込んで送信
-        res = search.get_dict(file=tmp_path)
+        res = search.get_dict(file=open(tmp_path, "rb")) # バイナリモードで開いて渡す
         
-        if "error" in res:
-            st.warning(f"API通知: {res['error']}")
-            return None
-            
         matches = res.get("visual_matches", [])
         if not matches:
-            # 視覚的一致がない場合、ショッピング結果をチェック
             matches = res.get("shopping_results", [])
             
         if matches:
@@ -65,7 +58,6 @@ def process_and_search_lens(uploaded_file):
                 "thumbnail": item.get("thumbnail")
             }
     except Exception as e:
-        # エラー詳細を表示
         st.error(f"詳細エラー: {str(e)}")
     finally:
         if os.path.exists(tmp_path):
@@ -75,9 +67,9 @@ def process_and_search_lens(uploaded_file):
 if search_btn:
     final_results = []
 
-    # 1. 画像検索の実行
+    # 1. 画像検索
     if uploaded_files:
-        with st.spinner("画像を最適化して解析中..."):
+        with st.spinner("画像を解析中..."):
             for f in uploaded_files[:3]:
                 res = process_and_search_lens(f)
                 if res:
@@ -89,14 +81,15 @@ if search_btn:
         if query:
             with st.spinner(f"「{query}」で検索中..."):
                 try:
-                    search = GoogleSearch({
+                    params = {
                         "engine": "google_shopping",
                         "q": query,
                         "api_key": SERPAPI_KEY,
                         "google_domain": "google.co.jp",
                         "hl": "ja",
                         "gl": "jp"
-                    })
+                    }
+                    search = GoogleSearch(params)
                     s_res = search.get_dict().get("shopping_results", [])
                     for s_item in s_res:
                         if len(final_results) >= 3: break
