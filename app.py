@@ -1,8 +1,8 @@
 import streamlit as st
 from serpapi import GoogleSearch
+import base64
 from PIL import Image
-import tempfile
-import os
+import io
 
 st.set_page_config(page_title="探し物は何ですか？", page_icon="🔍", layout="wide")
 
@@ -23,100 +23,84 @@ with st.sidebar:
     keywords = st.text_input("キーワード")
     search_btn = st.button("この条件で探す", type="primary")
 
-def process_and_search_lens(uploaded_file):
-    # 画像の軽量化処理 (PILを使用)
+def get_base64_image(uploaded_file):
+    """画像をリサイズしてBase64文字列に変換"""
     img = Image.open(uploaded_file)
-    img.thumbnail((800, 800))
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        # RGBに変換してJPEG保存
-        img.convert("RGB").save(tmp.name, format="JPEG", quality=85)
-        tmp_path = tmp.name
-
-    try:
-        # --- 最新の SerpApi ライブラリに対応した記述 ---
-        # 辞書形式のパラメータを作成
-        params = {
-            "engine": "google_lens",
-            "api_key": SERPAPI_KEY,
-            "hl": "ja"
-        }
-        
-        # GoogleSearchインスタンスを作成
-        search = GoogleSearch(params)
-        
-        # get_dictの中でfileを読み込んで渡すのではなく、
-        # searchオブジェクトに対して直接fileをセットして取得する形式です
-        search.params_dict["file"] = tmp_path
-        res = search.get_dict()
-        
-        # --- 結果の抽出 ---
-        matches = res.get("visual_matches", [])
-        if not matches:
-            matches = res.get("shopping_results", [])
-            
-        if matches:
-            item = matches[0]
-            return {
-                "title": item.get("title", "商品名不明"),
-                "price": item.get("price", {}).get("extracted", "価格不明") if isinstance(item.get("price"), dict) else item.get("price", "価格不明"),
-                "source": item.get("source", "不明"),
-                "link": item.get("link"),
-                "thumbnail": item.get("thumbnail")
-            }
-    except Exception as e:
-        st.error(f"詳細エラー: {str(e)}")
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-    return None
+    img.thumbnail((500, 500)) # サイズを小さくして転送エラーを防ぐ
+    buffered = io.BytesIO()
+    img.convert("RGB").save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode()
 
 if search_btn:
     final_results = []
 
-    # 1. 画像検索
+    # 1. 画像検索の実行
     if uploaded_files:
         with st.spinner("画像を解析中..."):
             for f in uploaded_files[:3]:
-                res = process_and_search_lens(f)
-                if res:
-                    final_results.append(res)
-
-    # 2. テキスト検索 (結果が不足している場合)
-    if len(final_results) < 3:
-        query = " ".join([p for p in [maker, part_number, keywords] if p])
-        if query:
-            with st.spinner(f"「{query}」で検索中..."):
                 try:
+                    b64_data = get_base64_image(f)
+                    # パラメータを極限までシンプルに
                     params = {
-                        "engine": "google_shopping",
-                        "q": query,
-                        "api_key": SERPAPI_KEY,
-                        "google_domain": "google.co.jp",
-                        "hl": "ja",
-                        "gl": "jp"
+                        "engine": "google_lens",
+                        "base64_image": b64_data,
+                        "api_key": SERPAPI_KEY
                     }
                     search = GoogleSearch(params)
-                    s_res = search.get_dict().get("shopping_results", [])
-                    for s_item in s_res:
-                        if len(final_results) >= 3: break
+                    res = search.get_dict()
+                    
+                    # デバッグ用（もし何も出ない場合はここを確認）
+                    # st.write(res) 
+                    
+                    matches = res.get("visual_matches", [])
+                    if matches:
+                        item = matches[0]
                         final_results.append({
-                            "title": s_item.get("title"),
-                            "price": s_item.get("price"),
-                            "source": s_item.get("source"),
-                            "link": s_item.get("link"),
-                            "thumbnail": s_item.get("thumbnail")
+                            "title": item.get("title", "商品名不明"),
+                            "price": item.get("price", {}).get("extracted", "価格不明") if isinstance(item.get("price"), dict) else "価格不明",
+                            "source": item.get("source", "不明"),
+                            "link": item.get("link"),
+                            "thumbnail": item.get("thumbnail")
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    st.error(f"解析エラー: {e}")
+
+    # 2. テキスト検索 (結果が不足している場合、または画像がない場合)
+    query_parts = [p for p in [maker, part_number, keywords] if p]
+    if len(final_results) < 3 and query_parts:
+        query = " ".join(query_parts)
+        with st.spinner(f"テキスト「{query}」で検索中..."):
+            try:
+                params = {
+                    "engine": "google_shopping",
+                    "q": query,
+                    "api_key": SERPAPI_KEY,
+                    "google_domain": "google.co.jp",
+                    "hl": "ja",
+                    "gl": "jp"
+                }
+                search = GoogleSearch(params)
+                s_res = search.get_dict().get("shopping_results", [])
+                for s_item in s_res:
+                    if len(final_results) >= 3: break
+                    final_results.append({
+                        "title": s_item.get("title"),
+                        "price": s_item.get("price"),
+                        "source": s_item.get("source"),
+                        "link": s_item.get("link"),
+                        "thumbnail": s_item.get("thumbnail")
+                    })
+            except Exception:
+                pass
 
     # 表示
     if not final_results:
-        st.error("商品が見つかりませんでした。別の画像をお試しください。")
+        st.error("商品が見つかりませんでした。別の画像や、より具体的な品番を入力してください。")
     else:
         st.success("候補が見つかりました！")
         cols = st.columns(3)
-        for i, item in enumerate(final_results[:3]):
+        for i in range(len(final_results[:3])):
+            item = final_results[i]
             with cols[i]:
                 with st.container(border=True):
                     if item.get("thumbnail"):
