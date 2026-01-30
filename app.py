@@ -34,16 +34,23 @@ def process_and_search_lens(uploaded_file):
         tmp_path = tmp.name
 
     try:
-        # --- ここを修正：GoogleSearchの引数に直接 file を渡します ---
+        # --- 最新の SerpApi ライブラリに対応した記述 ---
+        # 辞書形式のパラメータを作成
         params = {
             "engine": "google_lens",
             "api_key": SERPAPI_KEY,
             "hl": "ja"
         }
-        # fileパラメータを個別に指定する現在のライブラリ仕様に対応
-        search = GoogleSearch(params)
-        res = search.get_dict(file=open(tmp_path, "rb")) # バイナリモードで開いて渡す
         
+        # GoogleSearchインスタンスを作成
+        search = GoogleSearch(params)
+        
+        # get_dictの中でfileを読み込んで渡すのではなく、
+        # searchオブジェクトに対して直接fileをセットして取得する形式です
+        search.params_dict["file"] = tmp_path
+        res = search.get_dict()
+        
+        # --- 結果の抽出 ---
         matches = res.get("visual_matches", [])
         if not matches:
             matches = res.get("shopping_results", [])
